@@ -3,7 +3,7 @@
 Trinetra is a comprehensive Space Threat Monitoring System that combines real-time tracking and analysis of both artificial orbital debris and near-Earth asteroids. It provides an interactive 3D visualization dashboard with real-time alert capabilities.
 
 Project Management
-Track project tasks and progress on the [Trinetra Project Board](https://github.com/harshbhanushali36/Trinetra/projects/1)
+Track project tasks and progress on the [Trinetra Project Board](https://github.com/users/harshbhanushali36/projects/1/views/1)
 
 
 🔭 Features
