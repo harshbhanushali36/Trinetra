@@ -7,17 +7,57 @@
   <link href="https://cesium.com/downloads/cesiumjs/releases/1.118/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
   <style>
     html, body, #cesiumContainer {
-      width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+    /* Legend styling */
+    #legend {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: sans-serif;
+    }
+    #legend h3 {
+      margin: 0 0 8px 0;
+      font-size: 15px;
+      text-align: center;
+    }
+    #legend div {
+      margin: 4px 0;
+    }
+    #legend img {
+      width: 18px;
+      height: 18px;
+      vertical-align: middle;
+      margin-right: 6px;
     }
   </style>
 </head>
 <body>
   <div id="cesiumContainer"></div>
-  <script>
-    // 🔑 Add your Cesium Ion token here
-    Cesium.Ion.defaultAccessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI0ZjFmYzBjNS03MDdhLTRhMWQtYTRlZS0wZDYxOGU3ZTIwYjAiLCJpZCI6MzM3NjM5LCJpYXQiOjE3NTY4MzExOTR9.sb34VVm_fJqlVSy2UoihaZ5H1FDARSR8KkhwmVFtEGU";
 
-    // Initialize the viewer
+  <!-- Legend Overlay -->
+  <div id="legend">
+    <h3>Legend</h3>
+    <div><img src="satellite.png" alt="Satellite" /> Satellite</div>
+    <div><img src="rocket.png" alt="Rocket" /> Rocket Body</div>
+    <div><img src="debris.png" alt="Debris" /> Debris</div>
+  </div>
+
+  <script>
+    // 🔑 Your Cesium Ion token
+    Cesium.Ion.defaultAccessToken =
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI0ZjFmYzBjNS03MDdhLTRhMWQtYTRlZS0wZDYxOGU3ZTIwYjAiLCJpZCI6MzM3NjM5LCJpYXQiOjE3NTY4MzExOTR9.sb34VVm_fJqlVSy2UoihaZ5H1FDARSR8KkhwmVFtEGU";
+
+    // Initialize Cesium viewer
     const viewer = new Cesium.Viewer("cesiumContainer", {
       shouldAnimate: true,
       timeline: true,
@@ -27,13 +67,13 @@
       fullscreenButton: true,
     });
 
-    // Load orbital objects CZML
+    // Load CZML
     Cesium.CzmlDataSource.load("orbital_objects.czml").then((ds) => {
       viewer.dataSources.add(ds);
       viewer.zoomTo(ds);
     });
 
-    // Enhance realism
+    // Globe realism
     viewer.scene.globe.enableLighting = true;
     viewer.scene.globe.showGroundAtmosphere = true;
   </script>
