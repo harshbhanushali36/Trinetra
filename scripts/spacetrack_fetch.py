@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-spacetrack_to_czml_fixed.py
+spacetrack_to_czml_modes.py
 
 Modes:
  - HIGH_ACCURACY: 1 hr propagation, 60s steps
@@ -11,12 +11,12 @@ import requests
 import pandas as pd
 import json
 from sgp4.api import Satrec, jday
-from sgp4.conveniences import sat_epoch_datetime
 import numpy as np
 from datetime import datetime, timedelta, timezone
 import math
 from tqdm import tqdm
 from collections import Counter
+import statistics
 
 # -----------------------
 # User / runtime params
@@ -27,7 +27,6 @@ LOGIN_URL = "https://www.space-track.org/ajaxauth/login"
 CATALOG_URL = "https://www.space-track.org/basicspacedata/query/class/gp/format/json"
 
 OUTPUT_EXCEL = "spacetrack_data.xlsx"
-OUTPUT_CSV = "spacetrack_data.csv"
 OUTPUT_CZML = "orbital_objects.czml"
 
 # --- MODES ---
@@ -35,7 +34,7 @@ MODES = {
     "HIGH_ACCURACY": {"DURATION_HOURS": 1, "STEP_SECONDS": 60},
     "BALANCED": {"DURATION_HOURS": 0.5, "STEP_SECONDS": 300}
 }
-RUN_MODE = "BALANCED"   # "HIGH_ACCURACY" or "BALANCED"
+RUN_MODE = "BALANCED"   # <<-- change here: "HIGH_ACCURACY" or "BALANCED"
 
 # Object filter
 WANTED_TYPES = {"PAYLOAD", "ROCKET BODY", "DEBRIS"}
@@ -66,10 +65,48 @@ def teme_to_ecef_km(r_teme_km, dt_utc):
 def build_czml_cartesian_array(positions_m, offsets_s):
     arr = []
     for off, (x, y, z) in zip(offsets_s, positions_m):
-        if any(math.isnan(val) or math.isinf(val) for val in (x, y, z)):
-            continue
         arr.extend([off, float(x), float(y), float(z)])
     return arr
+
+def satrec_epoch_to_datetime(sat):
+    try:
+        jd = float(sat.jdsatepoch) + float(sat.jdsatepochF)
+    except Exception:
+        return None
+    jd += 0.5
+    F, I = math.modf(jd)
+    I = int(I)
+    A = int((I - 1867216.25) / 36524.25)
+    if I > 2299160:
+        B = I + 1 + A - int(A / 4)
+    else:
+        B = I
+    C = B + 1524
+    D = int((C - 122.1) / 365.25)
+    E = int(365.25 * D)
+    G = int((C - E) / 30.6001)
+    day = C - E + F - int(30.6001 * G)
+    if G < 13.5:
+        month = G - 1
+    else:
+        month = G - 13
+    if month > 2.5:
+        year = D - 4716
+    else:
+        year = D - 4715
+    day_frac, day_int = math.modf(day)
+    day_int = int(day_int)
+    secs = day_frac * 86400.0
+    hour = int(secs // 3600)
+    minute = int((secs % 3600) // 60)
+    second = secs - hour*3600 - minute*60
+    microsecond = int((second - int(second)) * 1e6)
+    second = int(second)
+    try:
+        dt = datetime(year, month, day_int, hour, minute, second, microsecond, tzinfo=timezone.utc)
+    except Exception:
+        return None
+    return dt
 
 # -----------------------
 # 1) Fetch & Save
@@ -104,15 +141,10 @@ df = df.rename(columns=rename_map)
 columns_to_keep = list(rename_map.values())
 df_filtered = df[[col for col in columns_to_keep if col in df.columns]]
 
-# Save to Excel
 with pd.ExcelWriter(OUTPUT_EXCEL, engine="openpyxl") as writer:
     df.to_excel(writer, sheet_name="Raw Data", index=False)
     df_filtered.to_excel(writer, sheet_name="Filtered Data", index=False)
-
-# Save to CSV
-df_filtered.to_csv(OUTPUT_CSV, index=False)
-
-print(f"✅ Data saved to {OUTPUT_EXCEL} and {OUTPUT_CSV}")
+print(f"✅ Data saved to {OUTPUT_EXCEL} with TLEs and filtered sheets.")
 
 # -----------------------
 # 2) Mode selection
@@ -169,6 +201,13 @@ objects_skipped_tle_age = 0
 objects_skipped_no_valid = 0
 sgp4_error_counts = Counter()
 
+# --- Color & symbol map ---
+TYPE_STYLES = {
+    "PAYLOAD":  {"color": [0, 255, 0, 255], "label": "🛰️"},   # green satellite
+    "ROCKET BODY": {"color": [255, 165, 0, 255], "label": "🚀"}, # orange rocket
+    "DEBRIS":   {"color": [255, 0, 0, 255], "label": "💥"}     # red debris
+}
+
 for name, tle1, tle2, obj_type in tqdm(candidates, desc="Propagating", unit="obj"):
     try:
         sat = Satrec.twoline2rv(tle1, tle2)
@@ -176,7 +215,7 @@ for name, tle1, tle2, obj_type in tqdm(candidates, desc="Propagating", unit="obj
         objects_skipped_no_valid += 1
         continue
 
-    tle_epoch_dt = sat_epoch_datetime(sat)
+    tle_epoch_dt = satrec_epoch_to_datetime(sat)
     if tle_epoch_dt is None:
         objects_skipped_no_valid += 1
         continue
@@ -184,6 +223,15 @@ for name, tle1, tle2, obj_type in tqdm(candidates, desc="Propagating", unit="obj
     age_days = (start_utc - tle_epoch_dt).total_seconds() / 86400.0
     if (TLE_MAX_AGE_DAYS is not None) and (age_days > TLE_MAX_AGE_DAYS):
         objects_skipped_tle_age += 1
+        continue
+
+    jd_epoch, fr_epoch = jday(tle_epoch_dt.year, tle_epoch_dt.month, tle_epoch_dt.day,
+                              tle_epoch_dt.hour, tle_epoch_dt.minute,
+                              tle_epoch_dt.second + tle_epoch_dt.microsecond*1e-6)
+    e0, r0, v0 = sat.sgp4(jd_epoch, fr_epoch)
+    if e0 != 0:
+        objects_skipped_no_valid += 1
+        sgp4_error_counts[e0] += 1
         continue
 
     valid_samples = []
@@ -204,36 +252,28 @@ for name, tle1, tle2, obj_type in tqdm(candidates, desc="Propagating", unit="obj
 
     offsets_s = [(t - start_utc).total_seconds() for t, _ in valid_samples]
     positions_m = [p for _, p in valid_samples]
-    cartesian_array = build_czml_cartesian_array(positions_m, offsets_s)
 
-    if not cartesian_array or len(cartesian_array) % 4 != 0:
-        objects_skipped_no_valid += 1
-        continue
-
-    # Billboard images (make sure to place in "images/" folder)
-    icon_map = {
-        "PAYLOAD": "satellite.png",
-        "ROCKET BODY": "rocket.png",
-        "DEBRIS": "debris.png"
-    }
-    image_file = icon_map.get(obj_type, "default.png")
+    style = TYPE_STYLES.get(obj_type, {"color": [200, 200, 200, 255], "label": "❓"})
 
     packet = {
         "id": name.replace(" ", "_")[:64],
-        "name": name,
+        "name": f"{style['label']} {name}",
         "availability": f"{start_utc.isoformat()}/{end_utc.isoformat()}",
         "properties": {"object_type": obj_type, "tle_age_days": float(f"{age_days:.2f}")},
         "position": {
             "epoch": epoch_for_czml,
-            "cartesian": cartesian_array,
-            "interpolationAlgorithm": "LAGRANGE",
-            "interpolationDegree": 5
+            "cartesian": build_czml_cartesian_array(positions_m, offsets_s)
         },
-        "billboard": {
-            "image": f"images/{image_file}",
-            "scale": 0.6,
-            "horizontalOrigin": "CENTER",
-            "verticalOrigin": "CENTER"
+        "point": {
+            "pixelSize": 3,
+            "color": {"rgba": style["color"]}
+        },
+        "label": {
+            "text": style["label"],
+            "font": "16px sans-serif",
+            "fillColor": {"rgba": style["color"]},
+            "pixelOffset": {"cartesian2": [10, -10]},
+            "show": False
         }
     }
     czml.append(packet)
@@ -252,3 +292,6 @@ print(" - Objects written to CZML:", objects_written)
 print(" - Skipped (old TLEs):", objects_skipped_tle_age)
 print(" - Skipped (errors):", objects_skipped_no_valid)
 print(" - sgp4 error counts:", dict(sgp4_error_counts))
+
+
+
