@@ -2,6 +2,10 @@
 """
 Scientifically Accurate Collision Prediction System
 Improved version with anisotropic covariance, encounter plane analysis, and better Monte Carlo
+Applied fixes:
+ - Passed actual relative velocity into collision probability routine
+ - Robust importance-sampling Monte Carlo with a fallback
+ - Fixed Space-Track TLE parsing typo
 """
 
 import numpy as np
@@ -230,12 +234,12 @@ class RealisticOrbitPropagator:
                 # Along-track grows fastest
                 pos = new_state[:3]
                 vel = new_state[3:]
-                r_mag = np.linalg.norm(pos)
+                r_mag = np.linalg.norm(pos) if np.linalg.norm(pos) > 0 else 1.0
                 
                 # Create growth transformation
                 r_unit = pos / r_mag
                 h = np.cross(pos, vel)
-                h_unit = h / np.linalg.norm(h)
+                h_unit = h / np.linalg.norm(h) if np.linalg.norm(h) > 0 else np.array([0.,0.,1.])
                 t_unit = np.cross(h_unit, r_unit)
                 
                 # Growth factors for each direction
@@ -412,17 +416,11 @@ class ImprovedConjunctionAnalyzer:
             # Combined hard body radius squared
             R_sq = combined_radius_km**2
             
-            # Alfano formula involves modified Bessel functions, but for computational
-            # simplicity, we'll use the small-target approximation which is accurate
-            # for most operational scenarios
-            
+            # Small-target approximation (valid when R << position uncertainty)
             if mahal_dist_sq < 1e-10:  # Very close approach
-                # For very small miss distances, use area ratio
                 pc = R_sq * np.sqrt(det_cov) / (2 * np.pi)
                 pc = min(pc, 1.0)
             else:
-                # Small target approximation (valid when R << position uncertainty)
-                # Pc ≈ (R²/2π) * exp(-d²/2) / sqrt(det(Σ))
                 pc = (R_sq / (2 * np.pi)) * np.exp(-mahal_dist_sq / 2) / np.sqrt(det_cov)
             
             return min(pc, 1.0)
@@ -441,46 +439,44 @@ class ImprovedConjunctionAnalyzer:
         try:
             miss_2d_mag = np.linalg.norm(miss_distance_2d)
             
-            # For very small probabilities, use importance sampling
+            # For very small probabilities, use importance sampling with robust fallback
             if miss_2d_mag > 3 * combined_radius_km:
-                # Bias sampling toward the collision disk
-                # Sample center moved closer to collision disk
-                bias_center = miss_distance_2d * (1 - combined_radius_km / miss_2d_mag)
-                
-                # Reduced variance for importance sampling
-                importance_cov = cov_2d * 0.25  # Smaller uncertainty for focused sampling
-                
+                # Bias sampling toward the collision disk, but not too aggressively
+                bias_factor = max(0.1, 1 - 0.6 * (combined_radius_km / miss_2d_mag))
+                bias_center = miss_distance_2d * bias_factor
+
+                # Importance covariance: shrink by a moderate factor to focus on disk region
+                importance_cov = cov_2d * 0.2
+
                 # Generate biased samples
                 samples = np.random.multivariate_normal(bias_center, importance_cov, n_samples)
-                
-                # Compute importance weights
-                # Weight = P_original(x) / P_importance(x)
-                weights = []
+
                 collisions_weighted = 0.0
-                
+
                 for sample in samples:
-                    # Distance to actual miss point
+                    # Distance from this importance sample to the true miss point
                     dist_to_miss = np.linalg.norm(sample - miss_distance_2d)
-                    
+
                     if dist_to_miss < combined_radius_km:
-                        # This is a collision - compute importance weight
-                        # Original density at this point
+                        # Compute importance weight: original_pdf / importance_pdf
                         orig_density = self._multivariate_normal_pdf(sample, np.zeros(2), cov_2d)
-                        
-                        # Importance density at this point
                         imp_density = self._multivariate_normal_pdf(sample, bias_center, importance_cov)
-                        
-                        if imp_density > 1e-20:
+                        if imp_density > 0 and orig_density > 0:
                             weight = orig_density / imp_density
                             collisions_weighted += weight
-                
+
                 pc = collisions_weighted / n_samples
-                
+
+                # Fallback: if no weighted collisions found, do a focused plain MC centered at the miss with many samples
+                if pc == 0.0:
+                    fallback_samples = max(200_000, n_samples * 4)
+                    samples_fb = np.random.multivariate_normal(miss_distance_2d, cov_2d, fallback_samples)
+                    distances = np.linalg.norm(samples_fb, axis=1)
+                    pc = np.sum(distances < combined_radius_km) / fallback_samples
+
             else:
-                # Standard Monte Carlo for reasonable probabilities
+                # Standard Monte Carlo for reasonable probabilities (centered at miss)
                 samples = np.random.multivariate_normal(miss_distance_2d, cov_2d, n_samples)
-                
-                # Count collisions (samples within combined radius of origin)
                 distances_to_origin = np.linalg.norm(samples, axis=1)
                 collisions = np.sum(distances_to_origin < combined_radius_km)
                 pc = collisions / n_samples
@@ -506,24 +502,21 @@ class ImprovedConjunctionAnalyzer:
         except:
             return 0.0
     
-    def compute_collision_probability(self, rel_pos_km: np.ndarray, combined_cov: np.ndarray,
-                                     combined_radius_m: float) -> Tuple[float, float, Dict]:
-        """Enhanced collision probability with encounter plane analysis"""
+    def compute_collision_probability(self, rel_pos_km: np.ndarray, rel_vel_km: np.ndarray,
+                                     combined_cov: np.ndarray, combined_radius_m: float) -> Tuple[float, float, Dict]:
+        """Enhanced collision probability with encounter plane analysis using actual relative velocity"""
         
         miss_distance_km = np.linalg.norm(rel_pos_km)
-        combined_radius_km = combined_radius_m / 1000
+        combined_radius_km = combined_radius_m / 1000.0
         
-        # Extract relative velocity (approximation for encounter plane)
-        # For simplicity, assume velocity is in a typical orbital direction
-        r_mag = np.linalg.norm(rel_pos_km)
-        if r_mag > EARTH_RADIUS:
-            # Estimate relative velocity magnitude (typical orbital speed difference)
-            orbital_speed = np.sqrt(MU_EARTH / r_mag)
-            rel_vel_estimate = np.array([orbital_speed * 0.1, 0, 0])  # Simplified estimate
-        else:
-            rel_vel_estimate = np.array([7.0, 0, 0])  # Default 7 km/s difference
+        # Use actual relative velocity passed in (km/s)
+        rel_vel_estimate = rel_vel_km
+        if np.linalg.norm(rel_vel_estimate) < 1e-6:
+            r_mag = np.linalg.norm(rel_pos_km)
+            orbital_speed = np.sqrt(MU_EARTH / r_mag) if r_mag > 0 else 7.5
+            rel_vel_estimate = np.array([orbital_speed * 0.1, 0, 0])
         
-        # Get encounter plane transformation
+        # Get encounter plane transformation using provided rel_vel_estimate
         transform_matrix, encounter_pos = self.get_encounter_plane_transform(rel_pos_km, rel_vel_estimate)
         
         # Project covariance to 2D encounter plane
@@ -536,14 +529,14 @@ class ImprovedConjunctionAnalyzer:
         
         # Check if miss distance is too large for any collision risk
         eigenvals = np.linalg.eigvals(cov_2d)
-        max_sigma = np.sqrt(np.max(eigenvals))
-        min_sigma = np.sqrt(np.min(eigenvals))
+        max_sigma = float(np.sqrt(np.max(eigenvals)))
+        min_sigma = float(np.sqrt(np.min(eigenvals)))
         
         if miss_distance_km > 10 * max_sigma + combined_radius_km:
             return 0.0, 0.0, {}
         
         # Enhanced Monte Carlo with importance sampling
-        mc_samples = max(self.n_samples, 50000) if miss_distance_km > 2.0 else self.n_samples
+        mc_samples = max(self.n_samples, 50_000) if miss_distance_km > 2.0 else self.n_samples
         pc_mc = self.importance_sampling_monte_carlo(miss_distance_2d, cov_2d, combined_radius_km, mc_samples)
         
         # Alfano analytical method
@@ -551,15 +544,15 @@ class ImprovedConjunctionAnalyzer:
         
         # Additional diagnostics
         diagnostics = {
-            'encounter_plane_miss_distance_km': np.linalg.norm(miss_distance_2d),
-            'covariance_eigenvalues_km2': eigenvals,
+            'encounter_plane_miss_distance_km': float(np.linalg.norm(miss_distance_2d)),
+            'covariance_eigenvalues_km2': eigenvals.tolist(),
             'max_position_sigma_km': max_sigma,
             'min_position_sigma_km': min_sigma,
-            'covariance_condition_number': max_sigma / min_sigma if min_sigma > 1e-10 else float('inf'),
-            'monte_carlo_samples_used': mc_samples
+            'covariance_condition_number': (max_sigma / min_sigma) if min_sigma > 1e-10 else float('inf'),
+            'monte_carlo_samples_used': int(mc_samples)
         }
         
-        return pc_mc, pc_alfano, diagnostics
+        return float(pc_mc), float(pc_alfano), diagnostics
 
 class ScientificallyAccurateCollisionPredictor:
     """Main system with enhanced analysis capabilities"""
@@ -842,9 +835,9 @@ class ScientificallyAccurateCollisionPredictor:
         radius2 = {'DEBRIS': 1, 'ROCKET_BODY': 5, 'SATELLITE': 10}.get(obj2.object_type, 5)
         combined_radius = radius1 + radius2
         
-        # Calculate enhanced collision probability
+        # Calculate enhanced collision probability — pass actual rel_vel!
         pc_mc, pc_alfano, diagnostics = self.analyzer.compute_collision_probability(
-            rel_pos, combined_cov, combined_radius
+            rel_pos, rel_vel, combined_cov, combined_radius
         )
         
         # Only return if there's actual risk
@@ -996,8 +989,8 @@ class ScientificallyAccurateCollisionPredictor:
             # Enhanced diagnostics
             if 'encounter_plane_miss_distance_km' in row:
                 print(f"    Encounter plane miss: {row['encounter_plane_miss_distance_km']:.3f} km")
-            if 'max_position_sigma_km' in row:
-                print(f"    Max/Min sigma: {row['max_position_sigma_km']:.2f}/{row.get('min_position_sigma_km', 0):.2f} km")
+            if 'max_position_sigma_km' in row and 'min_position_sigma_km' in row:
+                print(f"    Max/Min sigma: {row['max_position_sigma_km']:.2f}/{row['min_position_sigma_km']:.2f} km")
             if 'covariance_condition_number' in row:
                 cond_num = row['covariance_condition_number']
                 if np.isfinite(cond_num):
@@ -1120,8 +1113,9 @@ def fetch_spacetrack_tles(username, password):
                 tle1 = lines[i+1].strip()
                 tle2 = lines[i+2].strip()
                 
+                # Fixed typo: check len(tle2), not len(2)
                 if (tle1.startswith('1 ') and len(tle1) == 69 and
-                    tle2.startswith('2 ') and len(2) == 69):
+                    tle2.startswith('2 ') and len(tle2) == 69):
                     tle_data.append({
                         'name': name,
                         'tle_line1': tle1,
@@ -1144,7 +1138,7 @@ def main():
     print("ENHANCED COLLISION PREDICTION SYSTEM")
     print("With Anisotropic Covariance & Encounter Plane Analysis")
     print("="*70)
-    print("\nNew Features:")
+    print("\nNew Features:") 
     print("• Anisotropic initial covariance (3-10x along-track growth)")
     print("• Encounter plane projections (2D analysis)")
     print("• Importance sampling Monte Carlo")
@@ -1225,6 +1219,17 @@ def main():
                 print(f"• Alfano method: Industry-standard analytical approach")
                 print(f"• Enhanced diagnostics: Condition numbers, eigenvalues")
                 print(f"• Debug logging: {len(predictor.debug_log)} suspicious cases logged")
+                
+                # Optional: show first debug entry details for inspection (if any)
+                if predictor.debug_log:
+                    dbg = predictor.debug_log[0]
+                    print("\nEXAMPLE DEBUG ENTRY (first):")
+                    print(" Objects:", dbg['objects'])
+                    print(" TCA:", dbg['tca'])
+                    print(" Rel. vel (m/s):", dbg['rel_speed_ms'])
+                    # Do not print full state by default; uncomment if required
+                    # print(" State1:", dbg['state1'])
+                    # print(" State2:", dbg['state2'])
             else:
                 print("\nNo significant collision risks identified")
         else:
