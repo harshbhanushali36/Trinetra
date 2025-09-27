@@ -1,82 +1,212 @@
-//working till 15 sept
+//working but laggy for 27k objects 26 sept
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>Trinetra - Orbital Objects Viewer</title>
-  <script src="https://cesium.com/downloads/cesiumjs/releases/1.118/Build/Cesium/Cesium.js"></script>
-  <link href="https://cesium.com/downloads/cesiumjs/releases/1.118/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
+  <meta charset="UTF-8">
+  <title>TRINETRA Orbital Visualization</title>
+  <script src="https://files.worldwind.arc.nasa.gov/artifactory/web/0.11.0/worldwind.min.js"></script>
   <style>
-    html, body, #cesiumContainer {
-      width: 100%;
-      height: 100%;
+    html, body {
       margin: 0;
       padding: 0;
       overflow: hidden;
+      height: 100%;
+      width: 100%;
+      font-family: Arial, sans-serif;
+      background-color: #000;
     }
-    /* Legend styling */
-    #legend {
+    #globe {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+    }
+    #overlay {
       position: absolute;
       top: 10px;
-      right: 10px;
-      background: rgba(0, 0, 0, 0.7);
-      color: white;
-      padding: 10px 14px;
+      left: 10px;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      padding: 10px 15px;
       border-radius: 8px;
       font-size: 14px;
-      font-family: sans-serif;
+      max-width: 300px;
     }
-    #legend h3 {
-      margin: 0 0 8px 0;
-      font-size: 15px;
-      text-align: center;
+    #speedControl { margin-top: 8px; }
+    #infoBox {
+      position: absolute;
+      top: 50%;
+      right: 10px;
+      transform: translateY(-50%);
+      width: 300px;
+      max-height: 400px;
+      overflow-y: auto;
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      padding: 15px;
+      border-radius: 8px;
+      font-size: 14px;
+      display: none;
     }
-    #legend div {
-      margin: 4px 0;
-    }
-    #legend img {
-      width: 18px;
-      height: 18px;
-      vertical-align: middle;
-      margin-right: 6px;
-    }
+    #infoBox h4 { margin: 0 0 8px; }
+    #infoBox div { margin-bottom: 4px; }
   </style>
 </head>
 <body>
-  <div id="cesiumContainer"></div>
+  <canvas id="globe"></canvas>
 
-  <!-- Legend Overlay -->
-  <div id="legend">
-    <h3>Legend</h3>
-    <div><img src="icons/satellite.png" alt="Satellite" /> Satellite</div>
-    <div><img src="icons/rocket.png" alt="Rocket" /> Rocket Body</div>
-    <div><img src="icons/debris.png" alt="Debris" /> Debris</div>
+  <div id="overlay">
+    <h3>TRINETRA Stats</h3>
+    <div id="stats">Loading orbital objects...</div>
+    <div id="speedControl">
+      <label for="speedSlider">Orbit Speed:</label>
+      <input type="range" id="speedSlider" min="0.01" max="0.2" step="0.01" value="0.05">
+    </div>
   </div>
 
+  <div id="infoBox"></div>
+
   <script>
-    // 🔑 Your Cesium Ion token
-    Cesium.Ion.defaultAccessToken =
-      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI0ZjFmYzBjNS03MDdhLTRhMWQtYTRlZS0wZDYxOGU3ZTIwYjAiLCJpZCI6MzM3NjM5LCJpYXQiOjE3NTY4MzExOTR9.sb34VVm_fJqlVSy2UoihaZ5H1FDARSR8KkhwmVFtEGU";
+    const wwd = new WorldWind.WorldWindow("globe");
 
-    // Initialize Cesium viewer
-    const viewer = new Cesium.Viewer("cesiumContainer", {
-      shouldAnimate: true,
-      timeline: true,
-      animation: true,
-      baseLayerPicker: true,
-      sceneModePicker: true,
-      fullscreenButton: true,
+    // Base layers
+    wwd.addLayer(new WorldWind.BMNGOneImageLayer());
+    wwd.addLayer(new WorldWind.BMNGLandsatLayer());
+    wwd.addLayer(new WorldWind.AtmosphereLayer());
+    wwd.addLayer(new WorldWind.CompassLayer());
+    wwd.addLayer(new WorldWind.CoordinatesDisplayLayer(wwd));
+    wwd.addLayer(new WorldWind.ViewControlsLayer(wwd));
+
+    const objectLayer = new WorldWind.RenderableLayer("Orbital Objects");
+    const trailLayer = new WorldWind.RenderableLayer("Orbit Trails");
+    wwd.addLayer(objectLayer);
+    wwd.addLayer(trailLayer);
+
+    let satellites = [];
+    let currentTime = Date.now();
+
+    const placemarkAttributes = new WorldWind.PlacemarkAttributes(null);
+    placemarkAttributes.imageSource = WorldWind.configuration.baseUrl + "images/pushpins/plain-green.png";
+    placemarkAttributes.imageScale = 0.5;
+    placemarkAttributes.labelAttributes.color = WorldWind.Color.YELLOW;
+    placemarkAttributes.drawLeaderLine = false;
+
+    const infoBox = document.getElementById("infoBox");
+
+    // Load JSON
+    fetch("orbital_objects.json")
+      .then(res => res.json())
+      .then(data => {
+        const list = data.satellites; // Use all ~27k objects
+
+        satellites = list.map(sat => {
+          const placemark = new WorldWind.Placemark(new WorldWind.Position(0,0,0), false, placemarkAttributes);
+          placemark.label = ""; // Hidden initially
+          placemark.alwaysOnTop = true;
+          placemark.userObject = sat;
+          objectLayer.addRenderable(placemark);
+
+          const trail = new WorldWind.Path([], null);
+          trail.altitudeMode = WorldWind.RELATIVE_TO_GROUND;
+          trail.attributes = new WorldWind.ShapeAttributes(null);
+          trail.attributes.outlineColor = WorldWind.Color.CYAN;
+          trail.attributes.interiorColor = new WorldWind.Color(0,1,1,0.3);
+
+          return {
+            ...sat,
+            placemark,
+            trail,
+            trailPositions: [],
+            lastIndex: Math.random() * (sat.positions?.length || 1) // Randomize start to avoid overlapping
+          };
+        });
+
+        updateStats();
+        animate();
+      })
+      .catch(err => console.error("Error loading orbital_objects.json:", err));
+
+    function updateStats() {
+      const statsDiv = document.getElementById("stats");
+      statsDiv.innerHTML = `<div><b>Total Objects:</b> ${satellites.length}</div>`;
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const now = Date.now();
+      const dt = (now - currentTime) / 1000;
+      currentTime = now;
+
+      const speed = parseFloat(document.getElementById("speedSlider").value);
+
+      // Update satellites in batches (e.g., 1000 at a time)
+      const batchSize = 1000;
+      for(let start=0; start<satellites.length; start+=batchSize){
+        const batch = satellites.slice(start, start+batchSize);
+        batch.forEach(sat => {
+          if(!sat.positions || sat.positions.length < 2) return;
+
+          sat.lastIndex = (sat.lastIndex + dt * speed) % sat.positions.length;
+          const idx = Math.floor(sat.lastIndex);
+          const nextIdx = (idx+1) % sat.positions.length;
+          const t = sat.lastIndex - idx;
+
+          const p1 = sat.positions[idx];
+          const p2 = sat.positions[nextIdx];
+          const lat = p1.latitude + t*(p2.latitude - p1.latitude);
+          const lon = p1.longitude + t*(p2.longitude - p1.longitude);
+          const alt = (p1.altitude + t*(p2.altitude - p1.altitude)) * 1000;
+
+          sat.placemark.position = new WorldWind.Position(lat, lon, alt);
+
+          // Trail (last 30 positions)
+          sat.trailPositions.push(new WorldWind.Position(lat, lon, alt));
+          if(sat.trailPositions.length > 30) sat.trailPositions.shift();
+          sat.trail.positions = sat.trailPositions;
+          if(!trailLayer.renderables.includes(sat.trail)) trailLayer.addRenderable(sat.trail);
+        });
+      }
+
+      wwd.redraw();
+    }
+
+    // Hover labels
+    wwd.addEventListener("mousemove", event => {
+      const x = event.clientX, y = event.clientY;
+      const pickList = wwd.pick(wwd.canvasCoordinates(x, y));
+      satellites.forEach(s => s.placemark.label = "");
+      if(pickList.objects.length > 0){
+        pickList.objects.forEach(picked => {
+          if(picked.userObject instanceof WorldWind.Placemark){
+            picked.userObject.label = picked.userObject.userObject.name;
+          }
+        });
+      }
     });
 
-    // Load CZML
-    Cesium.CzmlDataSource.load("orbital_objects.czml").then((ds) => {
-      viewer.dataSources.add(ds);
-      viewer.zoomTo(ds);
+    // Click to show info box
+    wwd.addEventListener("click", event => {
+      const x = event.clientX, y = event.clientY;
+      const pickList = wwd.pick(wwd.canvasCoordinates(x, y));
+      if(pickList.objects.length > 0){
+        pickList.objects.forEach(picked => {
+          if(picked.userObject instanceof WorldWind.Placemark){
+            const obj = picked.userObject.userObject;
+            if(obj){
+              let html = `<h4>${obj.name}</h4>`;
+              html += `<div><b>Type:</b> ${obj.type || "N/A"}</div>`;
+              html += `<div><b>ID:</b> ${obj.id || "N/A"}</div>`;
+              html += `<div><b>Epoch:</b> ${obj.epoch || "N/A"}</div>`;
+              html += `<div><b>Positions Count:</b> ${obj.positions?.length || 0}</div>`;
+              html += `<div><b>Style:</b> ${JSON.stringify(obj.style)}</div>`;
+              infoBox.innerHTML = html;
+              infoBox.style.display = "block";
+            }
+          }
+        });
+      } else {
+        infoBox.style.display = "none";
+      }
     });
-
-    // Globe realism
-    viewer.scene.globe.enableLighting = true;
-    viewer.scene.globe.showGroundAtmosphere = true;
   </script>
 </body>
 </html>
