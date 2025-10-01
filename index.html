@@ -1,4 +1,4 @@
-//WORKING AND ALL 27K SATELLITES ARE DISPLAYED WITHOUT LAG AND NO TRAIL 2 OCT
+//WORKING AND ALL 27K SATELLITES ARE DISPLAYED WITHOUT LAG AND SELECTED TRAIL ONLY 2 OCT
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -224,15 +224,7 @@
 
         sat.placemark.position = new WorldWind.Position(lat, lon, alt);
 
-        // Only update trail for selected satellite
-        if (showTrails && sat === selectedSatellite) {
-          sat.trailPositions.push(new WorldWind.Position(lat, lon, alt));
-          if (sat.trailPositions.length > 50) sat.trailPositions.shift();
-          
-          if (selectedTrail) {
-            selectedTrail.positions = sat.trailPositions;
-          }
-        }
+        // Don't update trail during animation - it's already complete
       }
 
       wwd.redraw();
@@ -319,9 +311,19 @@
               if (selectedSatellite) {
                 selectedSatellite.placemark.attributes = selectedAttributes;
                 
-                // Create trail for selected satellite
+                // Create complete orbit trail for selected satellite
                 selectedSatellite.trailPositions = [];
-                selectedTrail = new WorldWind.Path([], null);
+                
+                // Add ALL positions to show the complete orbit
+                if (selectedSatellite.positions && selectedSatellite.positions.length > 0) {
+                  selectedSatellite.positions.forEach(pos => {
+                    selectedSatellite.trailPositions.push(
+                      new WorldWind.Position(pos.latitude, pos.longitude, pos.altitude * 1000)
+                    );
+                  });
+                }
+                
+                selectedTrail = new WorldWind.Path(selectedSatellite.trailPositions, null);
                 selectedTrail.altitudeMode = WorldWind.RELATIVE_TO_GROUND;
                 selectedTrail.attributes = new WorldWind.ShapeAttributes(null);
                 selectedTrail.attributes.outlineColor = new WorldWind.Color(1, 0, 0, 0.8);
@@ -366,8 +368,17 @@
           selectedSatellite.trailPositions = [];
         }
       } else if (e.target.checked && selectedSatellite && !selectedTrail) {
+        // Recreate complete orbit trail
         selectedSatellite.trailPositions = [];
-        selectedTrail = new WorldWind.Path([], null);
+        if (selectedSatellite.positions && selectedSatellite.positions.length > 0) {
+          selectedSatellite.positions.forEach(pos => {
+            selectedSatellite.trailPositions.push(
+              new WorldWind.Position(pos.latitude, pos.longitude, pos.altitude * 1000)
+            );
+          });
+        }
+        
+        selectedTrail = new WorldWind.Path(selectedSatellite.trailPositions, null);
         selectedTrail.altitudeMode = WorldWind.RELATIVE_TO_GROUND;
         selectedTrail.attributes = new WorldWind.ShapeAttributes(null);
         selectedTrail.attributes.outlineColor = new WorldWind.Color(1, 0, 0, 0.8);
