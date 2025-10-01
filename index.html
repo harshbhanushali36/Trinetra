@@ -1,4 +1,4 @@
-//working but laggy for 27k objects 26 sept
+//WORKING AND ALL 27K SATELLITES ARE DISPLAYED WITHOUT LAG AND NO TRAIL 2 OCT
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -24,46 +24,77 @@
       position: absolute;
       top: 10px;
       left: 10px;
-      background: rgba(0,0,0,0.6);
+      background: rgba(0,0,0,0.7);
       color: #fff;
       padding: 10px 15px;
       border-radius: 8px;
       font-size: 14px;
-      max-width: 300px;
+      max-width: 320px;
+      backdrop-filter: blur(10px);
     }
     #speedControl { margin-top: 8px; }
+    #performanceStats {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #aaa;
+    }
     #infoBox {
       position: absolute;
       top: 50%;
       right: 10px;
       transform: translateY(-50%);
-      width: 300px;
-      max-height: 400px;
+      width: 320px;
+      max-height: 500px;
       overflow-y: auto;
-      background: rgba(0,0,0,0.7);
+      background: rgba(0,0,0,0.8);
       color: #fff;
       padding: 15px;
       border-radius: 8px;
       font-size: 14px;
       display: none;
+      backdrop-filter: blur(10px);
     }
-    #infoBox h4 { margin: 0 0 8px; }
-    #infoBox div { margin-bottom: 4px; }
+    #infoBox h4 { margin: 0 0 10px; color: #4af; }
+    #infoBox div { margin-bottom: 6px; }
+    #infoBox .close {
+      float: right;
+      cursor: pointer;
+      font-size: 20px;
+      color: #fff;
+    }
+    input[type="range"] {
+      width: 100%;
+    }
+    label { display: block; margin-bottom: 4px; }
+    .toggle-group {
+      margin-top: 8px;
+    }
+    .toggle-group label {
+      display: inline;
+      margin-right: 10px;
+    }
   </style>
 </head>
 <body>
   <canvas id="globe"></canvas>
 
   <div id="overlay">
-    <h3>TRINETRA Stats</h3>
+    <h3 style="margin: 0 0 10px;">TRINETRA Stats</h3>
     <div id="stats">Loading orbital objects...</div>
     <div id="speedControl">
-      <label for="speedSlider">Orbit Speed:</label>
-      <input type="range" id="speedSlider" min="0.01" max="0.2" step="0.01" value="0.05">
+      <label for="speedSlider">Orbit Speed: <span id="speedValue">0.05</span>x</label>
+      <input type="range" id="speedSlider" min="0.01" max="0.5" step="0.01" value="0.05">
     </div>
+    <div class="toggle-group">
+      <label><input type="checkbox" id="showTrails"> Selected Trail</label>
+    </div>
+    <div id="performanceStats"></div>
   </div>
 
-  <div id="infoBox"></div>
+  <div id="infoBox">
+    <span class="close" onclick="closeInfoBox()">&times;</span>
+    <div id="infoContent"></div>
+  </div>
 
   <script>
     const wwd = new WorldWind.WorldWindow("globe");
@@ -78,45 +109,54 @@
 
     const objectLayer = new WorldWind.RenderableLayer("Orbital Objects");
     const trailLayer = new WorldWind.RenderableLayer("Orbit Trails");
+    const labelLayer = new WorldWind.RenderableLayer("Labels");
     wwd.addLayer(objectLayer);
     wwd.addLayer(trailLayer);
+    wwd.addLayer(labelLayer);
 
     let satellites = [];
     let currentTime = Date.now();
+    let fps = 0;
+    let lastFpsUpdate = Date.now();
+    let frameCount = 0;
+    let selectedSatellite = null;
+    let selectedTrail = null;
+    let hoverLabel = null;
 
+    // Smaller placemarks for all objects
     const placemarkAttributes = new WorldWind.PlacemarkAttributes(null);
     placemarkAttributes.imageSource = WorldWind.configuration.baseUrl + "images/pushpins/plain-green.png";
-    placemarkAttributes.imageScale = 0.5;
-    placemarkAttributes.labelAttributes.color = WorldWind.Color.YELLOW;
+    placemarkAttributes.imageScale = 0.25;
     placemarkAttributes.drawLeaderLine = false;
 
-    const infoBox = document.getElementById("infoBox");
+    const selectedAttributes = new WorldWind.PlacemarkAttributes(null);
+    selectedAttributes.imageSource = WorldWind.configuration.baseUrl + "images/pushpins/plain-red.png";
+    selectedAttributes.imageScale = 0.5;
+    selectedAttributes.drawLeaderLine = false;
 
-    // Load JSON
+    const infoBox = document.getElementById("infoBox");
+    const infoContent = document.getElementById("infoContent");
+
+    // Load ALL objects
     fetch("orbital_objects.json")
       .then(res => res.json())
       .then(data => {
-        const list = data.satellites; // Use all ~27k objects
+        const list = data.satellites;
 
-        satellites = list.map(sat => {
+        // Create ALL satellites
+        satellites = list.map((sat, idx) => {
           const placemark = new WorldWind.Placemark(new WorldWind.Position(0,0,0), false, placemarkAttributes);
-          placemark.label = ""; // Hidden initially
-          placemark.alwaysOnTop = true;
-          placemark.userObject = sat;
+          placemark.alwaysOnTop = false;
+          placemark.userObject = sat; // Store the satellite data directly
           objectLayer.addRenderable(placemark);
-
-          const trail = new WorldWind.Path([], null);
-          trail.altitudeMode = WorldWind.RELATIVE_TO_GROUND;
-          trail.attributes = new WorldWind.ShapeAttributes(null);
-          trail.attributes.outlineColor = WorldWind.Color.CYAN;
-          trail.attributes.interiorColor = new WorldWind.Color(0,1,1,0.3);
 
           return {
             ...sat,
             placemark,
-            trail,
             trailPositions: [],
-            lastIndex: Math.random() * (sat.positions?.length || 1) // Randomize start to avoid overlapping
+            lastIndex: Math.random() * (sat.positions?.length || 1),
+            id: idx,
+            originalAttributes: placemarkAttributes
           };
         });
 
@@ -127,84 +167,212 @@
 
     function updateStats() {
       const statsDiv = document.getElementById("stats");
-      statsDiv.innerHTML = `<div><b>Total Objects:</b> ${satellites.length}</div>`;
+      statsDiv.innerHTML = `<div><b>Total Objects:</b> ${satellites.length.toLocaleString()}</div>`;
     }
 
+    function updatePerformanceStats() {
+      const perfDiv = document.getElementById("performanceStats");
+      perfDiv.innerHTML = `<div>FPS: ${fps}</div>`;
+    }
+
+    function closeInfoBox() {
+      infoBox.style.display = "none";
+      if (selectedSatellite) {
+        selectedSatellite.placemark.attributes = selectedSatellite.originalAttributes;
+        selectedSatellite = null;
+      }
+      if (selectedTrail) {
+        trailLayer.removeRenderable(selectedTrail);
+        selectedTrail = null;
+      }
+    }
+
+    // Optimized animation - update positions only, minimal trail
     function animate() {
       requestAnimationFrame(animate);
       const now = Date.now();
-      const dt = (now - currentTime) / 1000;
+      const dt = Math.min((now - currentTime) / 1000, 0.1);
       currentTime = now;
 
+      // FPS calculation
+      frameCount++;
+      if (now - lastFpsUpdate > 1000) {
+        fps = Math.round(frameCount * 1000 / (now - lastFpsUpdate));
+        frameCount = 0;
+        lastFpsUpdate = now;
+        updatePerformanceStats();
+      }
+
       const speed = parseFloat(document.getElementById("speedSlider").value);
+      const showTrails = document.getElementById("showTrails").checked;
 
-      // Update satellites in batches (e.g., 1000 at a time)
-      const batchSize = 1000;
-      for(let start=0; start<satellites.length; start+=batchSize){
-        const batch = satellites.slice(start, start+batchSize);
-        batch.forEach(sat => {
-          if(!sat.positions || sat.positions.length < 2) return;
+      // Update ALL satellites positions - optimized loop
+      for (let i = 0; i < satellites.length; i++) {
+        const sat = satellites[i];
+        if (!sat.positions || sat.positions.length < 2) continue;
 
-          sat.lastIndex = (sat.lastIndex + dt * speed) % sat.positions.length;
-          const idx = Math.floor(sat.lastIndex);
-          const nextIdx = (idx+1) % sat.positions.length;
-          const t = sat.lastIndex - idx;
+        sat.lastIndex = (sat.lastIndex + dt * speed) % sat.positions.length;
+        const idx = Math.floor(sat.lastIndex);
+        const nextIdx = (idx + 1) % sat.positions.length;
+        const t = sat.lastIndex - idx;
 
-          const p1 = sat.positions[idx];
-          const p2 = sat.positions[nextIdx];
-          const lat = p1.latitude + t*(p2.latitude - p1.latitude);
-          const lon = p1.longitude + t*(p2.longitude - p1.longitude);
-          const alt = (p1.altitude + t*(p2.altitude - p1.altitude)) * 1000;
+        const p1 = sat.positions[idx];
+        const p2 = sat.positions[nextIdx];
+        const lat = p1.latitude + t * (p2.latitude - p1.latitude);
+        const lon = p1.longitude + t * (p2.longitude - p1.longitude);
+        const alt = (p1.altitude + t * (p2.altitude - p1.altitude)) * 1000;
 
-          sat.placemark.position = new WorldWind.Position(lat, lon, alt);
+        sat.placemark.position = new WorldWind.Position(lat, lon, alt);
 
-          // Trail (last 30 positions)
+        // Only update trail for selected satellite
+        if (showTrails && sat === selectedSatellite) {
           sat.trailPositions.push(new WorldWind.Position(lat, lon, alt));
-          if(sat.trailPositions.length > 30) sat.trailPositions.shift();
-          sat.trail.positions = sat.trailPositions;
-          if(!trailLayer.renderables.includes(sat.trail)) trailLayer.addRenderable(sat.trail);
-        });
+          if (sat.trailPositions.length > 50) sat.trailPositions.shift();
+          
+          if (selectedTrail) {
+            selectedTrail.positions = sat.trailPositions;
+          }
+        }
       }
 
       wwd.redraw();
     }
 
-    // Hover labels
+    // Throttled mousemove for hover labels
+    let lastMouseMove = 0;
+    
     wwd.addEventListener("mousemove", event => {
+      const now = Date.now();
+      if (now - lastMouseMove < 150) return;
+      lastMouseMove = now;
+
       const x = event.clientX, y = event.clientY;
       const pickList = wwd.pick(wwd.canvasCoordinates(x, y));
-      satellites.forEach(s => s.placemark.label = "");
-      if(pickList.objects.length > 0){
-        pickList.objects.forEach(picked => {
-          if(picked.userObject instanceof WorldWind.Placemark){
-            picked.userObject.label = picked.userObject.userObject.name;
+      
+      // Clear previous hover label
+      if (hoverLabel) {
+        labelLayer.removeRenderable(hoverLabel);
+        hoverLabel = null;
+      }
+
+      if (pickList.objects.length > 0) {
+        for (let i = 0; i < pickList.objects.length; i++) {
+          const picked = pickList.objects[i];
+          
+          // The picked object IS the placemark
+          if (picked.userObject instanceof WorldWind.Placemark) {
+            const placemark = picked.userObject;
+            const sat = placemark.userObject;
+            
+            if (sat && sat.name) {
+              const fullSat = satellites.find(s => s.name === sat.name);
+              if (fullSat && fullSat !== selectedSatellite) {
+                const labelAttr = new WorldWind.PlacemarkAttributes(null);
+                labelAttr.imageSource = WorldWind.configuration.baseUrl + "images/pushpins/plain-yellow.png";
+                labelAttr.imageScale = 0.4;
+                labelAttr.labelAttributes.color = WorldWind.Color.YELLOW;
+                labelAttr.labelAttributes.offset = new WorldWind.Offset(WorldWind.OFFSET_FRACTION, 0.5, WorldWind.OFFSET_FRACTION, 1.5);
+                
+                hoverLabel = new WorldWind.Placemark(placemark.position, false, labelAttr);
+                hoverLabel.label = sat.name;
+                hoverLabel.alwaysOnTop = true;
+                labelLayer.addRenderable(hoverLabel);
+                break;
+              }
+            }
           }
-        });
+        }
       }
     });
 
-    // Click to show info box
+    // Click to select and show info
     wwd.addEventListener("click", event => {
       const x = event.clientX, y = event.clientY;
       const pickList = wwd.pick(wwd.canvasCoordinates(x, y));
-      if(pickList.objects.length > 0){
-        pickList.objects.forEach(picked => {
-          if(picked.userObject instanceof WorldWind.Placemark){
-            const obj = picked.userObject.userObject;
-            if(obj){
-              let html = `<h4>${obj.name}</h4>`;
-              html += `<div><b>Type:</b> ${obj.type || "N/A"}</div>`;
-              html += `<div><b>ID:</b> ${obj.id || "N/A"}</div>`;
-              html += `<div><b>Epoch:</b> ${obj.epoch || "N/A"}</div>`;
-              html += `<div><b>Positions Count:</b> ${obj.positions?.length || 0}</div>`;
-              html += `<div><b>Style:</b> ${JSON.stringify(obj.style)}</div>`;
-              infoBox.innerHTML = html;
-              infoBox.style.display = "block";
+      
+      console.log("Click detected, picked objects:", pickList.objects.length);
+      
+      // Clear previous selection
+      if (selectedSatellite) {
+        selectedSatellite.placemark.attributes = selectedSatellite.originalAttributes;
+      }
+      if (selectedTrail) {
+        trailLayer.removeRenderable(selectedTrail);
+        selectedTrail = null;
+      }
+      
+      if (pickList.objects.length > 0) {
+        for (let i = 0; i < pickList.objects.length; i++) {
+          const picked = pickList.objects[i];
+          console.log("Picked object:", picked);
+          
+          // The picked object IS the placemark, and userObject is the satellite data
+          if (picked.userObject instanceof WorldWind.Placemark) {
+            const placemark = picked.userObject;
+            const sat = placemark.userObject;
+            console.log("Found placemark, satellite:", sat);
+            
+            if (sat && sat.name) {
+              // Find the full satellite object from our array
+              selectedSatellite = satellites.find(s => s.name === sat.name);
+              
+              if (selectedSatellite) {
+                selectedSatellite.placemark.attributes = selectedAttributes;
+                
+                // Create trail for selected satellite
+                selectedSatellite.trailPositions = [];
+                selectedTrail = new WorldWind.Path([], null);
+                selectedTrail.altitudeMode = WorldWind.RELATIVE_TO_GROUND;
+                selectedTrail.attributes = new WorldWind.ShapeAttributes(null);
+                selectedTrail.attributes.outlineColor = new WorldWind.Color(1, 0, 0, 0.8);
+                selectedTrail.attributes.outlineWidth = 2;
+                trailLayer.addRenderable(selectedTrail);
+                
+                document.getElementById("showTrails").checked = true;
+                
+                let html = `<h4>${sat.name}</h4>`;
+                html += `<div><b>Type:</b> ${sat.type || "N/A"}</div>`;
+                html += `<div><b>ID:</b> ${sat.id || "N/A"}</div>`;
+                html += `<div><b>Epoch:</b> ${sat.epoch || "N/A"}</div>`;
+                html += `<div><b>Positions:</b> ${sat.positions?.length || 0}</div>`;
+                if (sat.style) {
+                  html += `<div><b>Color:</b> ${sat.style.color || "N/A"}</div>`;
+                }
+                
+                infoContent.innerHTML = html;
+                infoBox.style.display = "block";
+                console.log("Info box shown");
+                break;
+              }
             }
           }
-        });
+        }
       } else {
-        infoBox.style.display = "none";
+        closeInfoBox();
+      }
+    });
+
+    // Speed slider update
+    document.getElementById("speedSlider").addEventListener("input", (e) => {
+      document.getElementById("speedValue").textContent = e.target.value;
+    });
+
+    // Trail toggle
+    document.getElementById("showTrails").addEventListener("change", (e) => {
+      if (!e.target.checked && selectedTrail) {
+        trailLayer.removeRenderable(selectedTrail);
+        selectedTrail = null;
+        if (selectedSatellite) {
+          selectedSatellite.trailPositions = [];
+        }
+      } else if (e.target.checked && selectedSatellite && !selectedTrail) {
+        selectedSatellite.trailPositions = [];
+        selectedTrail = new WorldWind.Path([], null);
+        selectedTrail.altitudeMode = WorldWind.RELATIVE_TO_GROUND;
+        selectedTrail.attributes = new WorldWind.ShapeAttributes(null);
+        selectedTrail.attributes.outlineColor = new WorldWind.Color(1, 0, 0, 0.8);
+        selectedTrail.attributes.outlineWidth = 2;
+        trailLayer.addRenderable(selectedTrail);
       }
     });
   </script>
