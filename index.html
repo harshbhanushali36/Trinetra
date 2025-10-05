@@ -1,391 +1,597 @@
-//WORKING AND ALL 27K SATELLITES ARE DISPLAYED WITHOUT LAG AND SELECTED TRAIL ONLY 2 OCT
+//WORKING AND ALL 27K SATELLITES ARE DISPLAYED WITHOUT LAG with small png AND SELECTED TRAIL ONLY, 5 OCT
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>TRINETRA Orbital Visualization</title>
   <script src="https://files.worldwind.arc.nasa.gov/artifactory/web/0.11.0/worldwind.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
   <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-      height: 100%;
-      width: 100%;
-      font-family: Arial, sans-serif;
-      background-color: #000;
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: 'Segoe UI', Arial, sans-serif; 
+      background: #000; 
+      overflow: hidden; 
+      height: 100vh;
     }
-    #globe {
-      width: 100%;
-      height: 100%;
-      position: absolute;
+    #globe { width: 100%; height: 100%; position: absolute; }
+    #threeCanvas { 
+      width: 100%; 
+      height: 100%; 
+      position: absolute; 
+      pointer-events: none; 
+      z-index: 1; 
     }
-    #overlay {
+    .panel {
       position: absolute;
-      top: 10px;
-      left: 10px;
-      background: rgba(0,0,0,0.7);
+      background: rgba(10, 15, 30, 0.9);
       color: #fff;
-      padding: 10px 15px;
-      border-radius: 8px;
-      font-size: 14px;
-      max-width: 320px;
-      backdrop-filter: blur(10px);
+      padding: 15px 20px;
+      border-radius: 12px;
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(100, 150, 255, 0.4);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+      z-index: 10;
     }
-    #speedControl { margin-top: 8px; }
-    #performanceStats {
-      margin-top: 8px;
-      font-size: 12px;
-      color: #aaa;
+    #controls {
+      top: 20px;
+      right: 20px;
+      width: 260px;
     }
-    #infoBox {
-      position: absolute;
+    #legend {
+      bottom: 20px;
+      left: 20px;
+      width: 240px;
+    }
+    #info {
       top: 50%;
-      right: 10px;
+      right: 20px;
       transform: translateY(-50%);
       width: 320px;
-      max-height: 500px;
+      max-height: 70vh;
       overflow-y: auto;
-      background: rgba(0,0,0,0.8);
-      color: #fff;
-      padding: 15px;
-      border-radius: 8px;
-      font-size: 14px;
       display: none;
-      backdrop-filter: blur(10px);
     }
-    #infoBox h4 { margin: 0 0 10px; color: #4af; }
-    #infoBox div { margin-bottom: 6px; }
-    #infoBox .close {
-      float: right;
-      cursor: pointer;
-      font-size: 20px;
-      color: #fff;
+    #loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(10, 15, 30, 0.95);
+      padding: 30px 50px;
+      border-radius: 15px;
+      border: 2px solid #4af;
+      display: none;
+      z-index: 100;
+    }
+    .spinner {
+      border: 4px solid rgba(100, 150, 255, 0.3);
+      border-top: 4px solid #4af;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 15px;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    h3 { 
+      margin: 0 0 15px; 
+      font-size: 17px; 
+      color: #4af; 
+      border-bottom: 2px solid rgba(100, 150, 255, 0.4);
+      padding-bottom: 10px;
+      font-weight: 600;
+    }
+    .stat { 
+      display: flex; 
+      justify-content: space-between; 
+      margin: 10px 0;
+      font-size: 14px;
+      align-items: center;
+    }
+    .stat-label { color: #aaa; }
+    .stat-value { 
+      color: #0f0; 
+      font-weight: bold;
+      font-family: 'Courier New', monospace;
+      font-size: 15px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      margin: 10px 0;
+      font-size: 14px;
+    }
+    .legend-color {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      margin-right: 12px;
+      box-shadow: 0 0 12px currentColor;
+      border: 2px solid currentColor;
     }
     input[type="range"] {
       width: 100%;
+      margin: 10px 0;
+      accent-color: #4af;
+      height: 6px;
     }
-    label { display: block; margin-bottom: 4px; }
-    .toggle-group {
-      margin-top: 8px;
+    label { 
+      display: block; 
+      margin: 12px 0 6px;
+      font-size: 13px;
+      color: #aaa;
+      font-weight: 500;
     }
-    .toggle-group label {
-      display: inline;
-      margin-right: 10px;
+    .close {
+      float: right;
+      cursor: pointer;
+      font-size: 26px;
+      color: #f44;
+      line-height: 1;
+      margin-top: -8px;
+      transition: color 0.2s;
+    }
+    .close:hover { color: #f88; }
+    .info-title {
+      font-size: 18px;
+      color: #4af;
+      margin-bottom: 15px;
+      font-weight: 600;
     }
   </style>
 </head>
 <body>
   <canvas id="globe"></canvas>
+  <canvas id="threeCanvas"></canvas>
 
-  <div id="overlay">
-    <h3 style="margin: 0 0 10px;">TRINETRA Stats</h3>
-    <div id="stats">Loading orbital objects...</div>
-    <div id="speedControl">
-      <label for="speedSlider">Orbit Speed: <span id="speedValue">0.05</span>x</label>
-      <input type="range" id="speedSlider" min="0.01" max="0.5" step="0.01" value="0.05">
-    </div>
-    <div class="toggle-group">
-      <label><input type="checkbox" id="showTrails"> Selected Trail</label>
-    </div>
-    <div id="performanceStats"></div>
+  <div id="loading">
+    <div class="spinner"></div>
+    <div style="color: #4af; text-align: center; font-size: 14px;">Loading 3D Model...</div>
   </div>
 
-  <div id="infoBox">
-    <span class="close" onclick="closeInfoBox()">&times;</span>
+  <div id="controls" class="panel">
+    <h3>🛰️ TRINETRA</h3>
+    <label>Orbit Speed: <span id="speedVal">1.0</span>x</label>
+    <input type="range" id="speed" min="0.1" max="5" step="0.1" value="1">
+    <div class="stat">
+      <span class="stat-label">FPS:</span>
+      <span class="stat-value" id="fps">--</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">3D Model:</span>
+      <span class="stat-value" id="modelStatus">None</span>
+    </div>
+  </div>
+
+  <div id="legend" class="panel">
+    <h3>📊 Objects</h3>
+    <div class="legend-item">
+      <div class="legend-color" style="background: #0f0; color: #0f0;"></div>
+      <span>Satellites: <b id="satCount">0</b></span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-color" style="background: #f60; color: #f60;"></div>
+      <span>Rockets: <b id="rocketCount">0</b></span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-color" style="background: #f00; color: #f00;"></div>
+      <span>Debris: <b id="debrisCount">0</b></span>
+    </div>
+    <div class="stat" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(100,150,255,0.3);">
+      <span class="stat-label">TOTAL:</span>
+      <span class="stat-value" id="totalCount">0</span>
+    </div>
+  </div>
+
+  <div id="info" class="panel">
+    <span class="close" onclick="closeInfo()">×</span>
     <div id="infoContent"></div>
   </div>
 
   <script>
     const wwd = new WorldWind.WorldWindow("globe");
-
-    // Base layers
     wwd.addLayer(new WorldWind.BMNGOneImageLayer());
     wwd.addLayer(new WorldWind.BMNGLandsatLayer());
     wwd.addLayer(new WorldWind.AtmosphereLayer());
+    wwd.addLayer(new WorldWind.StarFieldLayer());
     wwd.addLayer(new WorldWind.CompassLayer());
-    wwd.addLayer(new WorldWind.CoordinatesDisplayLayer(wwd));
     wwd.addLayer(new WorldWind.ViewControlsLayer(wwd));
 
-    const objectLayer = new WorldWind.RenderableLayer("Orbital Objects");
-    const trailLayer = new WorldWind.RenderableLayer("Orbit Trails");
-    const labelLayer = new WorldWind.RenderableLayer("Labels");
+    const objectLayer = new WorldWind.RenderableLayer("Objects");
+    const trailLayer = new WorldWind.RenderableLayer("Trails");
     wwd.addLayer(objectLayer);
     wwd.addLayer(trailLayer);
-    wwd.addLayer(labelLayer);
 
-    let satellites = [];
-    let currentTime = Date.now();
-    let fps = 0;
-    let lastFpsUpdate = Date.now();
-    let frameCount = 0;
-    let selectedSatellite = null;
-    let selectedTrail = null;
-    let hoverLabel = null;
+    // Three.js setup
+    const canvas = document.getElementById('threeCanvas');
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 1, 500000000);
+    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Performance optimization
 
-    // Smaller placemarks for all objects
-    const placemarkAttributes = new WorldWind.PlacemarkAttributes(null);
-    placemarkAttributes.imageSource = WorldWind.configuration.baseUrl + "images/pushpins/plain-green.png";
-    placemarkAttributes.imageScale = 0.25;
-    placemarkAttributes.drawLeaderLine = false;
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+    sun.position.set(10, 5, 7);
+    scene.add(sun);
 
-    const selectedAttributes = new WorldWind.PlacemarkAttributes(null);
-    selectedAttributes.imageSource = WorldWind.configuration.baseUrl + "images/pushpins/plain-red.png";
-    selectedAttributes.imageScale = 0.5;
-    selectedAttributes.drawLeaderLine = false;
+    let sats = [], selected = null, trail = null, currentModel = null;
+    let time = Date.now(), fps = 0, frames = 0, lastFps = Date.now();
+    let moonModel = null;
+    let isLoadingModel = false;
 
-    const infoBox = document.getElementById("infoBox");
-    const infoContent = document.getElementById("infoContent");
+    const loader = new THREE.GLTFLoader();
+    const BASE_URL = 'https://raw.githubusercontent.com/harshbhanushali36/Trinetra/main';
 
-    // Load ALL objects
-    fetch("orbital_objects.json")
-      .then(res => res.json())
-      .then(data => {
-        const list = data.satellites;
+    // Geodetic to 3D coords
+    function toXYZ(lat, lon, alt) {
+      const R = 6371000 + alt;
+      const phi = (90 - lat) * Math.PI / 180;
+      const theta = lon * Math.PI / 180;
+      return new THREE.Vector3(
+        R * Math.sin(phi) * Math.cos(theta),
+        R * Math.cos(phi),
+        R * Math.sin(phi) * Math.sin(theta)
+      );
+    }
 
-        // Create ALL satellites
-        satellites = list.map((sat, idx) => {
-          const placemark = new WorldWind.Placemark(new WorldWind.Position(0,0,0), false, placemarkAttributes);
-          placemark.alwaysOnTop = false;
-          placemark.userObject = sat; // Store the satellite data directly
-          objectLayer.addRenderable(placemark);
+    // Create Moon
+    function createMoon() {
+      const moonGeom = new THREE.SphereGeometry(1737400, 32, 32);
+      const moonMat = new THREE.MeshPhongMaterial({ 
+        color: 0xcccccc,
+        shininess: 5
+      });
+      const moon = new THREE.Mesh(moonGeom, moonMat);
+      moon.userData.orbitRadius = 384400000;
+      moon.userData.orbitSpeed = 0.00001;
+      moon.userData.angle = 0;
+      return moon;
+    }
 
-          return {
-            ...sat,
-            placemark,
-            trailPositions: [],
-            lastIndex: Math.random() * (sat.positions?.length || 1),
-            id: idx,
-            originalAttributes: placemarkAttributes
-          };
+    // Load GLB model
+    function loadGLBModel(type, position) {
+      if (isLoadingModel) return;
+      
+      isLoadingModel = true;
+      document.getElementById('loading').style.display = 'block';
+      
+      const modelMap = {
+        'satellite': 'satellite.glb',
+        'payload': 'satellite.glb',
+        'rocket body': 'rocket.glb',
+        'rocket': 'rocket.glb',
+        'debris': 'asteroid.glb'
+      };
+      
+      const filename = modelMap[type.toLowerCase()] || 'satellite.glb';
+      const url = `${BASE_URL}/models/${filename}`;
+      
+      // Remove old model
+      if (currentModel) {
+        scene.remove(currentModel);
+        currentModel.traverse(child => {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) {
+              child.material.forEach(mat => mat.dispose());
+            } else {
+              child.material.dispose();
+            }
+          }
         });
+        currentModel = null;
+      }
+      
+      loader.load(
+        url,
+        (gltf) => {
+          currentModel = gltf.scene;
+          
+          // Scale model appropriately
+          const box = new THREE.Box3().setFromObject(currentModel);
+          const size = box.getSize(new THREE.Vector3());
+          const maxDim = Math.max(size.x, size.y, size.z);
+          const scale = 50000 / maxDim; // Scale to 50km size
+          currentModel.scale.setScalar(scale);
+          
+          // Position at satellite location
+          currentModel.position.copy(position);
+          
+          // Orient away from Earth
+          const dir = position.clone().normalize();
+          currentModel.lookAt(position.clone().add(dir));
+          
+          // Add to scene
+          scene.add(currentModel);
+          
+          document.getElementById('loading').style.display = 'none';
+          document.getElementById('modelStatus').textContent = 'Loaded';
+          isLoadingModel = false;
+        },
+        (progress) => {
+          // Optional: show progress
+        },
+        (error) => {
+          console.error('Error loading model:', error);
+          document.getElementById('loading').style.display = 'none';
+          document.getElementById('modelStatus').textContent = 'Failed';
+          isLoadingModel = false;
+        }
+      );
+    }
 
-        updateStats();
+    // Sync cameras
+    function syncCam() {
+      const eye = wwd.navigator.lookAtLocation;
+      const range = wwd.navigator.range;
+      camera.position.copy(toXYZ(eye.latitude, eye.longitude, range));
+      camera.lookAt(toXYZ(eye.latitude, eye.longitude, 0));
+      camera.updateProjectionMatrix();
+    }
+
+    // Create fallback canvas icon
+    function createFallbackIcon(type) {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 32;
+      const ctx = canvas.getContext('2d');
+      
+      const colorMap = {
+        'satellite': '#00ff00',
+        'payload': '#00ff00',
+        'rocket body': '#ff6600',
+        'rocket': '#ff6600',
+        'debris': '#ff0000'
+      };
+      
+      const color = colorMap[type.toLowerCase()] || '#ffff00';
+      
+      // Glow effect
+      const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+      gradient.addColorStop(0, color);
+      gradient.addColorStop(0.5, color + '88');
+      gradient.addColorStop(1, color + '00');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, 32, 32);
+      
+      // Center dot
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(16, 16, 6, 0, Math.PI * 2);
+      ctx.fill();
+      
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      
+      return canvas.toDataURL();
+    }
+
+    // Load PNG icon with fallback
+    function loadIcon(type) {
+      const iconMap = {
+        'satellite': 'satellite.png',
+        'payload': 'satellite.png',
+        'rocket body': 'rocket.png',
+        'rocket': 'rocket.png',
+        'debris': 'asteroid.png'
+      };
+      const filename = iconMap[type.toLowerCase()] || 'satellite.png';
+      const url = `${BASE_URL}/icons/${filename}`;
+      
+      // Try to load PNG, fallback to canvas icon
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = url;
+      
+      // Return URL optimistically, will fallback if fails
+      return url;
+    }
+
+    // Load data
+    fetch("orbital_objects.json")
+      .then(r => r.json())
+      .then(data => {
+        const counts = { satellite: 0, rocket: 0, debris: 0 };
+        
+        sats = data.satellites.map((s, i) => {
+          const type = (s.type || 'unknown').toLowerCase();
+          if (type.includes('satellite') || type.includes('payload')) counts.satellite++;
+          else if (type.includes('rocket')) counts.rocket++;
+          else if (type.includes('debris')) counts.debris++;
+          
+          const attrs = new WorldWind.PlacemarkAttributes(null);
+          
+          // Try PNG first, use fallback if it fails
+          const pngUrl = loadIcon(s.type);
+          const fallbackIcon = createFallbackIcon(s.type);
+          
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => {
+            attrs.imageSource = pngUrl;
+          };
+          img.onerror = () => {
+            attrs.imageSource = fallbackIcon;
+          };
+          img.src = pngUrl;
+          
+          // Set fallback initially
+          attrs.imageSource = fallbackIcon;
+          attrs.imageScale = 0.05;
+          attrs.imageOffset = new WorldWind.Offset(
+            WorldWind.OFFSET_FRACTION, 0.5,
+            WorldWind.OFFSET_FRACTION, 0.5
+          );
+          
+          const pm = new WorldWind.Placemark(new WorldWind.Position(0, 0, 0), false, attrs);
+          pm.userObject = s;
+          objectLayer.addRenderable(pm);
+          
+          return { ...s, placemark: pm, idx: Math.random() * (s.positions?.length || 1), id: i, type: s.type };
+        });
+        
+        document.getElementById('satCount').textContent = counts.satellite;
+        document.getElementById('rocketCount').textContent = counts.rocket;
+        document.getElementById('debrisCount').textContent = counts.debris;
+        document.getElementById('totalCount').textContent = sats.length;
+        
+        // Add Moon
+        moonModel = createMoon();
+        scene.add(moonModel);
+        
         animate();
-      })
-      .catch(err => console.error("Error loading orbital_objects.json:", err));
+      });
 
-    function updateStats() {
-      const statsDiv = document.getElementById("stats");
-      statsDiv.innerHTML = `<div><b>Total Objects:</b> ${satellites.length.toLocaleString()}</div>`;
-    }
-
-    function updatePerformanceStats() {
-      const perfDiv = document.getElementById("performanceStats");
-      perfDiv.innerHTML = `<div>FPS: ${fps}</div>`;
-    }
-
-    function closeInfoBox() {
-      infoBox.style.display = "none";
-      if (selectedSatellite) {
-        selectedSatellite.placemark.attributes = selectedSatellite.originalAttributes;
-        selectedSatellite = null;
+    function closeInfo() {
+      document.getElementById('info').style.display = 'none';
+      selected = null;
+      
+      if (trail) {
+        trailLayer.removeRenderable(trail);
+        trail = null;
       }
-      if (selectedTrail) {
-        trailLayer.removeRenderable(selectedTrail);
-        selectedTrail = null;
+      
+      if (currentModel) {
+        scene.remove(currentModel);
+        currentModel.traverse(child => {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) {
+              child.material.forEach(mat => mat.dispose());
+            } else {
+              child.material.dispose();
+            }
+          }
+        });
+        currentModel = null;
+        document.getElementById('modelStatus').textContent = 'None';
       }
     }
 
-    // Optimized animation - update positions only, minimal trail
     function animate() {
       requestAnimationFrame(animate);
       const now = Date.now();
-      const dt = Math.min((now - currentTime) / 1000, 0.1);
-      currentTime = now;
-
-      // FPS calculation
-      frameCount++;
-      if (now - lastFpsUpdate > 1000) {
-        fps = Math.round(frameCount * 1000 / (now - lastFpsUpdate));
-        frameCount = 0;
-        lastFpsUpdate = now;
-        updatePerformanceStats();
+      const dt = Math.min((now - time) / 1000, 0.1);
+      time = now;
+      
+      frames++;
+      if (now - lastFps > 1000) {
+        fps = Math.round(frames * 1000 / (now - lastFps));
+        frames = 0;
+        lastFps = now;
+        document.getElementById('fps').textContent = fps;
       }
-
-      const speed = parseFloat(document.getElementById("speedSlider").value);
-      const showTrails = document.getElementById("showTrails").checked;
-
-      // Update ALL satellites positions - optimized loop
-      for (let i = 0; i < satellites.length; i++) {
-        const sat = satellites[i];
-        if (!sat.positions || sat.positions.length < 2) continue;
-
-        sat.lastIndex = (sat.lastIndex + dt * speed) % sat.positions.length;
-        const idx = Math.floor(sat.lastIndex);
-        const nextIdx = (idx + 1) % sat.positions.length;
-        const t = sat.lastIndex - idx;
-
-        const p1 = sat.positions[idx];
-        const p2 = sat.positions[nextIdx];
+      
+      const speed = parseFloat(document.getElementById('speed').value);
+      
+      // Update satellites
+      sats.forEach(s => {
+        if (!s.positions || s.positions.length < 2) return;
+        s.idx = (s.idx + dt * speed * 0.1) % s.positions.length;
+        const i = Math.floor(s.idx);
+        const j = (i + 1) % s.positions.length;
+        const t = s.idx - i;
+        const p1 = s.positions[i], p2 = s.positions[j];
         const lat = p1.latitude + t * (p2.latitude - p1.latitude);
         const lon = p1.longitude + t * (p2.longitude - p1.longitude);
         const alt = (p1.altitude + t * (p2.altitude - p1.altitude)) * 1000;
-
-        sat.placemark.position = new WorldWind.Position(lat, lon, alt);
-
-        // Don't update trail during animation - it's already complete
+        
+        s.placemark.position = new WorldWind.Position(lat, lon, alt);
+        
+        // Update 3D model position if this is selected satellite
+        if (currentModel && selected && s === selected) {
+          const pos = toXYZ(lat, lon, alt);
+          currentModel.position.copy(pos);
+          const dir = pos.clone().normalize();
+          currentModel.lookAt(pos.clone().add(dir));
+          currentModel.rotation.y += 0.005; // Slow rotation
+        }
+      });
+      
+      // Animate Moon orbit
+      if (moonModel) {
+        moonModel.userData.angle += moonModel.userData.orbitSpeed;
+        const r = moonModel.userData.orbitRadius;
+        moonModel.position.set(
+          Math.cos(moonModel.userData.angle) * r,
+          Math.sin(moonModel.userData.angle * 0.08) * r * 0.05,
+          Math.sin(moonModel.userData.angle) * r
+        );
       }
-
+      
+      syncCam();
+      renderer.render(scene, camera);
       wwd.redraw();
     }
 
-    // Throttled mousemove for hover labels
-    let lastMouseMove = 0;
-    
-    wwd.addEventListener("mousemove", event => {
-      const now = Date.now();
-      if (now - lastMouseMove < 150) return;
-      lastMouseMove = now;
-
-      const x = event.clientX, y = event.clientY;
-      const pickList = wwd.pick(wwd.canvasCoordinates(x, y));
+    // Click handler
+    wwd.addEventListener("click", e => {
+      const pick = wwd.pick(wwd.canvasCoordinates(e.clientX, e.clientY));
       
-      // Clear previous hover label
-      if (hoverLabel) {
-        labelLayer.removeRenderable(hoverLabel);
-        hoverLabel = null;
+      if (trail) {
+        trailLayer.removeRenderable(trail);
+        trail = null;
       }
-
-      if (pickList.objects.length > 0) {
-        for (let i = 0; i < pickList.objects.length; i++) {
-          const picked = pickList.objects[i];
+      
+      if (pick.objects.length > 0) {
+        const obj = pick.objects[0].userObject;
+        if (obj instanceof WorldWind.Placemark) {
+          const s = obj.userObject;
+          selected = sats.find(sat => sat.name === s.name);
           
-          // The picked object IS the placemark
-          if (picked.userObject instanceof WorldWind.Placemark) {
-            const placemark = picked.userObject;
-            const sat = placemark.userObject;
-            
-            if (sat && sat.name) {
-              const fullSat = satellites.find(s => s.name === sat.name);
-              if (fullSat && fullSat !== selectedSatellite) {
-                const labelAttr = new WorldWind.PlacemarkAttributes(null);
-                labelAttr.imageSource = WorldWind.configuration.baseUrl + "images/pushpins/plain-yellow.png";
-                labelAttr.imageScale = 0.4;
-                labelAttr.labelAttributes.color = WorldWind.Color.YELLOW;
-                labelAttr.labelAttributes.offset = new WorldWind.Offset(WorldWind.OFFSET_FRACTION, 0.5, WorldWind.OFFSET_FRACTION, 1.5);
-                
-                hoverLabel = new WorldWind.Placemark(placemark.position, false, labelAttr);
-                hoverLabel.label = sat.name;
-                hoverLabel.alwaysOnTop = true;
-                labelLayer.addRenderable(hoverLabel);
-                break;
-              }
+          if (selected) {
+            // Create orbit trail
+            if (selected.positions) {
+              const positions = selected.positions.map(p => 
+                new WorldWind.Position(p.latitude, p.longitude, p.altitude * 1000)
+              );
+              trail = new WorldWind.Path(positions);
+              trail.altitudeMode = WorldWind.RELATIVE_TO_GROUND;
+              trail.attributes = new WorldWind.ShapeAttributes(null);
+              trail.attributes.outlineColor = new WorldWind.Color(0, 1, 1, 0.7);
+              trail.attributes.outlineWidth = 2;
+              trailLayer.addRenderable(trail);
             }
-          }
-        }
-      }
-    });
-
-    // Click to select and show info
-    wwd.addEventListener("click", event => {
-      const x = event.clientX, y = event.clientY;
-      const pickList = wwd.pick(wwd.canvasCoordinates(x, y));
-      
-      console.log("Click detected, picked objects:", pickList.objects.length);
-      
-      // Clear previous selection
-      if (selectedSatellite) {
-        selectedSatellite.placemark.attributes = selectedSatellite.originalAttributes;
-      }
-      if (selectedTrail) {
-        trailLayer.removeRenderable(selectedTrail);
-        selectedTrail = null;
-      }
-      
-      if (pickList.objects.length > 0) {
-        for (let i = 0; i < pickList.objects.length; i++) {
-          const picked = pickList.objects[i];
-          console.log("Picked object:", picked);
-          
-          // The picked object IS the placemark, and userObject is the satellite data
-          if (picked.userObject instanceof WorldWind.Placemark) {
-            const placemark = picked.userObject;
-            const sat = placemark.userObject;
-            console.log("Found placemark, satellite:", sat);
             
-            if (sat && sat.name) {
-              // Find the full satellite object from our array
-              selectedSatellite = satellites.find(s => s.name === sat.name);
-              
-              if (selectedSatellite) {
-                selectedSatellite.placemark.attributes = selectedAttributes;
-                
-                // Create complete orbit trail for selected satellite
-                selectedSatellite.trailPositions = [];
-                
-                // Add ALL positions to show the complete orbit
-                if (selectedSatellite.positions && selectedSatellite.positions.length > 0) {
-                  selectedSatellite.positions.forEach(pos => {
-                    selectedSatellite.trailPositions.push(
-                      new WorldWind.Position(pos.latitude, pos.longitude, pos.altitude * 1000)
-                    );
-                  });
-                }
-                
-                selectedTrail = new WorldWind.Path(selectedSatellite.trailPositions, null);
-                selectedTrail.altitudeMode = WorldWind.RELATIVE_TO_GROUND;
-                selectedTrail.attributes = new WorldWind.ShapeAttributes(null);
-                selectedTrail.attributes.outlineColor = new WorldWind.Color(1, 0, 0, 0.8);
-                selectedTrail.attributes.outlineWidth = 2;
-                trailLayer.addRenderable(selectedTrail);
-                
-                document.getElementById("showTrails").checked = true;
-                
-                let html = `<h4>${sat.name}</h4>`;
-                html += `<div><b>Type:</b> ${sat.type || "N/A"}</div>`;
-                html += `<div><b>ID:</b> ${sat.id || "N/A"}</div>`;
-                html += `<div><b>Epoch:</b> ${sat.epoch || "N/A"}</div>`;
-                html += `<div><b>Positions:</b> ${sat.positions?.length || 0}</div>`;
-                if (sat.style) {
-                  html += `<div><b>Color:</b> ${sat.style.color || "N/A"}</div>`;
-                }
-                
-                infoContent.innerHTML = html;
-                infoBox.style.display = "block";
-                console.log("Info box shown");
-                break;
-              }
+            // Load 3D model
+            const pos = selected.placemark.position;
+            if (pos) {
+              loadGLBModel(selected.type, toXYZ(pos.latitude, pos.longitude, pos.altitude));
             }
+            
+            // Show info
+            document.getElementById('infoContent').innerHTML = `
+              <div class="info-title">${s.name}</div>
+              <div class="stat"><span class="stat-label">Type:</span><span class="stat-value">${s.type || 'N/A'}</span></div>
+              <div class="stat"><span class="stat-label">ID:</span><span class="stat-value">${s.id || 'N/A'}</span></div>
+              <div class="stat"><span class="stat-label">Epoch:</span><span class="stat-value">${s.epoch || 'N/A'}</span></div>
+              <div class="stat"><span class="stat-label">Altitude:</span><span class="stat-value">${Math.round(pos.altitude / 1000)} km</span></div>
+            `;
+            document.getElementById('info').style.display = 'block';
+            
+            // Zoom to satellite
+            wwd.goTo(new WorldWind.Position(pos.latitude, pos.longitude, pos.altitude + 5000000));
           }
         }
       } else {
-        closeInfoBox();
+        closeInfo();
       }
     });
 
-    // Speed slider update
-    document.getElementById("speedSlider").addEventListener("input", (e) => {
-      document.getElementById("speedValue").textContent = e.target.value;
-    });
+    document.getElementById('speed').oninput = e => 
+      document.getElementById('speedVal').textContent = e.target.value;
 
-    // Trail toggle
-    document.getElementById("showTrails").addEventListener("change", (e) => {
-      if (!e.target.checked && selectedTrail) {
-        trailLayer.removeRenderable(selectedTrail);
-        selectedTrail = null;
-        if (selectedSatellite) {
-          selectedSatellite.trailPositions = [];
-        }
-      } else if (e.target.checked && selectedSatellite && !selectedTrail) {
-        // Recreate complete orbit trail
-        selectedSatellite.trailPositions = [];
-        if (selectedSatellite.positions && selectedSatellite.positions.length > 0) {
-          selectedSatellite.positions.forEach(pos => {
-            selectedSatellite.trailPositions.push(
-              new WorldWind.Position(pos.latitude, pos.longitude, pos.altitude * 1000)
-            );
-          });
-        }
-        
-        selectedTrail = new WorldWind.Path(selectedSatellite.trailPositions, null);
-        selectedTrail.altitudeMode = WorldWind.RELATIVE_TO_GROUND;
-        selectedTrail.attributes = new WorldWind.ShapeAttributes(null);
-        selectedTrail.attributes.outlineColor = new WorldWind.Color(1, 0, 0, 0.8);
-        selectedTrail.attributes.outlineWidth = 2;
-        trailLayer.addRenderable(selectedTrail);
-      }
-    });
+    onresize = () => {
+      renderer.setSize(innerWidth, innerHeight);
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+    };
   </script>
 </body>
 </html>
